@@ -1,2 +1,2 @@
 # NWSCapstone25
-This is the software archive for the PCR testbench (to be) designed at OU for the Fall 2025 semester.
+This is the archive of all material related to the software for the PCR testbench designed in Fall 2025.
