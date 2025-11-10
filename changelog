@@ -1,7 +1,14 @@
-v0.0 (11-02-2025){ 
+v0.1 (11-09-2025) {
+  Added pin for RF start trigger
+  Changed pin names for keypad pins
+  Added keypad.h library for non-blocking keypad reads
+  Started writing NumberInput struct to handle conversion of char keypad inputs to usable floats
+  Edited various comments
+}
+v0.0 (11-02-2025) { 
   Added top header comment
   Added pin definitions section
   Added variable declarations section
   Added outputPRIs function
   Added other descriptive comments
-}/* v0.0 (11-02-2025) */
+} /* v0.0 (11-02-2025) */
