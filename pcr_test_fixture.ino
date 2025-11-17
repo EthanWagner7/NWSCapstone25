@@ -14,6 +14,7 @@
 
 #include <SPI.h>
 #include <Keypad.h>
+#include <string.h>
 
 /*
  ***********************
@@ -99,6 +100,7 @@ float        current_monitor_voltage;
 float        discharge_trigger_time;
 float        discharge_trigger_delta;
 char         key;
+int          menu_position;
 int          operating_mode;
 float        PCR_trigger_time;
 float        PRF;
@@ -159,7 +161,8 @@ void setup() {
   /* Set start_menu to 0 to disable operating mode prompt*/
   start_menu     = 1; 
   operating_mode = 0;
-
+  menu_position  = 1;
+  
 } /* setup() */
 
 /*
@@ -233,42 +236,173 @@ void outputPRIs(float PRF) {
 
 } /* outputPRIs() */
 
-struct NumberInput {
-  const int max             = 16;
-  char      buffer[max + 1] = {0};
-  int       length          = 0;
+/*
+ *********************
+ *** keyToString() ***
+ *********************
+ *
+ **********
+ * Inputs *      
+ **********
+ *
+ * key: This is the char that is returned from the getKey() function of the Keypad class
+ *
+ ***********
+ * Outputs *
+ ***********
+ *
+ * String version of key.
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * The function retruns a string that represents the keypad function of the key that was pressed.
+ *   For digits, this is just the string version of the digit. For function buttons, this is the 
+ *   name of the funtion that cooresponds with that key.
+ */
 
-  void clear() {
-    length = 0;
-    buffer[0] = '\0';
-  }
+const char* keyToString(char key) {
+  switch (key) {
+    case '#': return "Reset";
+    case '*': return ".";
+    case 'A': return "Enter";
+    case 'B': return "Back";
+    case 'C': return "Clear";
+    case 'D': return "Stop";
+    case '1': return "1";
+    case '2': return "2";
+    case '3': return "3";
+    case '4': return "4";
+    case '5': return "5";
+    case '6': return "6";
+    case '7': return "7";
+    case '8': return "8";
+    case '9': return "9";
+    case '0': return "0";
+    default:  return "";
+  }/* switch (key) */
+}/* keyToString(char key) */
 
-  void backspace() {
-    if (length > 0) {
-      buffer[length - 1] = '\0'
-    } /* if (length > 0) */
-  }
+/*
+ *************************
+ *** concatenateKeys() ***
+ *************************
+ *
+ **********
+ * Inputs *      
+ **********
+ *
+ * key_string: This is the return value of the getKey() function of the keypad class after
+ *               it has been passed through the keyToString() function.
+ *
+ * word: This is the word that is currently being typed on the keypad. For example, 
+ *        "321." if the user were trying to input "321.24". If nothing has been typed,  
+ *        pass the empty string, "", to the function.
+ *
+ ***********
+ * Outputs *
+ ***********
+ *
+ * combine: This is the concatenation of word and key_string. For example, 
+ *            if word = "321" and key_string = ".", then combine "321.".
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function takes a string and appends another string on to the end of it.
+ *
+ */
 
-  void addDigit(char digit) {
-    if (length < max) {
-      buffer[length + 1] = digit;
-      buffer[length]     = '\0'
-    }
-  }
+char* concatenateKeys(char* key_string, char* word) {
+  char combine[16];
+  strcpy(combine, word);
+  strcat(combine, key_string);
+  return combine;
+} /* concatenateKeys(char* key_string, char* word) */
 
-  void addDecimal() {
-    int has_decimal = 0;
-    for (i = 0; i < length; i++) {
-      if (buffer[i] == '.'){
-        has_decimal = 1;
-      }
-    }
-    if (len < max && !has_decimal) {
 
-    }
-  }
-} /* NumberInput */
+/*
+ ************
+ *** Menu ***
+ ************
+ *
+ *************
+ * Variables *
+ *************
+ *
+ * current: This stores the current menu for each Menu object on an individual basis.
+ *
+ *********
+ * Types *
+ *********
+ *
+ * ID: Each ID subtype represents a different menu, for example Start is the start menu.
+ *
+ *************
+ * Functions *
+ *************
+ * 
+ * enter(): This function switches the menu to the next menu in the sequence.
+ *            For example, if menu.enter() is called and the current menu is PRF,
+ *            the enter function switches the current menu to PulseMode.
+ *
+ * back():  This function switches the menu to the previous menu in the sequence.
+ *            For example, if menu.back() is called and the current menu is PRF,
+ *            the back function switches the current menu to Start.
+ *
+ * title(): This function returns the title of the current menu. 
+ *            For example, if menu.title() is called and the current menu is PRF,
+ *            the title function returns the string "PRF Input".
+ *
+ * id():    This function returns the ID of the current menu.
+ *            For example, if menu.id() is called and the current menu is PRF,
+ *            the id function returns the ID Menu::ID::PRF.
+ *            Notice that the return type of the function is the ID data type.
+ */
 
+class Menu {
+public:
+  enum class ID : uint8_t {Options, Start, PRF, PulseMode, Test};
+
+  Menu() : current(ID::Start) {} //Initialize current screen
+
+  void enter() {
+    switch(current) {
+      case ID::Options:   current = ID::Start; break;
+      case ID::Start:     current = ID::PRF; break;
+      case ID::PRF:       current = ID::PulseMode; break;
+      case ID::PulseMode: current = ID::Test; break;
+      case ID::Test:      break;
+    } /* switch(current) */
+  } /* enter() */
+
+  void back() {
+    switch(current) {
+      case ID::Options:   break;
+      case ID::Start:     current = ID::Options; break;
+      case ID::PRF:       current = ID::Start; break;
+      case ID::PulseMode: current = ID::PRF; break;
+      case ID::Test:      break;
+    } /* switch(current) */
+  } /* back() */
+
+  const char* title() const {
+    switch(current) {
+      case ID::Options:   return "Options";
+      case ID::Start:     return "Start";
+      case ID::PRF:       return "PRF Input";
+      case ID::PulseMode: return "Pulse Mode Input";
+      case ID::Test:      return "Test Results";
+    } /* switch(current) */
+  } /* title() */
+
+  ID id() const {return current;}
+
+}/* Menu */
+
+Menu menu;
 
 /*
  **************
@@ -292,25 +426,46 @@ struct NumberInput {
  */
  
 void loop() {
-  if (start_menu) { 
+  if    (menu.id() == Menu::ID::Start) { 
     /* Output Start Menu */
-  } /* if (start_menu) */
-  while (start_menu) {
-    key = keypad.getkey();
+  } /* if (menu.id() == Menu::ID::Start) */
+
+  while (menu.id() == Menu::ID::Start) {
+    key = keyToString(keypad.getkey());
     
-    if (key == '1') {      /* Select transmitter dependent mode */
+    if (key == "1") {      /* Select transmitter dependent mode */
       operating_mode = 1;
       start_menu     = 0;
     } /* if (key == '1') */
 
-    else if (key == '2') { /* Select High Voltage Module control mode */
+    else if (key == "2") { /* Select High Voltage Module control mode */
       operating_mode = 0;
       start_menu     = 0;
     } /* else if (key == '2') */
-  } /* while (start_menu) */
+  } /* while (menu.id() == Menu::ID::Start) */
 
-  /* Read PRF */
-  
-  /* Read Pulse Length (Long or Short) */
+  if    (menu.id() == Menu::ID::PRF) {
+
+  } /* if (menu.id() == Menu::ID::PRF) */
+
+  while (menu.id() == Menu::ID::PRF) {
+
+  } /* while (menu.id() == Menu::ID::PRF) */
+
+  if    (menu.id() == Menu::ID::PulseMode) {
+
+  } /* if (menu.id() == Menu::ID::PulseMode) */
+
+  while (menu.id() == Menu::ID::PulseMode) {
+
+  } /* while (menu.id() == Menu::ID::PulseMode) */
+
+  if    (menu.id() == Menu::ID::Test) {
+
+  }/* if (menu.id() == Menu::ID::Test) */
+
+  while (menu.id() == Menu::ID::Test) {
+
+  } /* while (menu.id() == Menu::ID::Test) */
 
 } /* loop() */
