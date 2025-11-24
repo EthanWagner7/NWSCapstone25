@@ -1,3 +1,8 @@
+v0.3 (11-23-2025) {
+  Added 5 new functions to control timing during test
+  Added charge and discharge trigger pins
+  Added calculations for timings in main loop
+} /* v0.3 (11-23-2025) */
 v0.2 (11-16-2025) {
   Removed NumberInput struct (replaced with the two added functions)
   Added Menu class
