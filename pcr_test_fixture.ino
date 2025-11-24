@@ -15,6 +15,7 @@
 #include <SPI.h>
 #include <Keypad.h>
 #include <string.h>
+#include <IntervalTimer.h>
 
 /*
  ***********************
@@ -24,43 +25,51 @@
  *        in the schematic. All renamed signals have their schematic names listed in      *
  *        parentheses beside them. Refer to these descriptions to verify functionality.   *
  ******************************************************************************************
- * PRI[n]:          These pins control the nth PRI bit. Signals are sent to the differential 
- *                    line driver.
- * PCR_Trigger:     (TRIGIN) This is the PCR trigger, which is buffered, then sent to the PCR.
- * PCR_Reset:       This signal resets the fault on the PCR.
- * Fault_In:        (FLTOUT) This signal comes from the PCR and gives its fault status.
- * DC:              (D/C) Data/Command select line foe the display.
- * CS:              SPI Chip Select line for the display.
- * SDI:             SPI Serial Data In  line for the display.
- * SDO:             SPI Serial Data Out line for the display.
- * SCK:             SPI Clock line for the display.
- * Current_Monitor: (Current MCU) This is the buffered output of the PCR current monitor pin.
- * Col[n]:          The nth column of switches on the keypad, starting from the left side.
- * Row[n]:          The nth row    of switches on the keypad, starting from the top.
- * RF_Start:        (RF START 3.3V) Input for the RF Start trigger from the transmitter.
+ * Charge_Trigger:    (Charge Trig 3.3) This is the charge trigger, which is buffered, sent to 
+ *                      the line driver, then sent to the high voltage module.
+ * Discharge_Trigger: (Discharge Trig 3.3) This is the discharge trigger, which is buffered, sent to 
+ *                      the line driver, then sent to the high voltage module.
+ * PRI[n]:            These pins control the nth PRI bit. Signals are sent to the differential 
+ *                      line driver.
+ * PCR_Trigger:       (TRIGIN) This is the PCR trigger, which is buffered, then sent to the PCR.
+ * PCR_Reset:         This signal resets the fault on the PCR.
+ * Fault_In:          (FLTOUT) This signal comes from the PCR and gives its fault status.
+ * NC:                Pin not connected.
+ * DC:                (D/C) Data/Command select line foe the display.
+ * CS:                SPI Chip Select line for the display.
+ * SDI:               SPI Serial Data In  line for the display.
+ * SDO:               SPI Serial Data Out line for the display.
+ * SCK:               SPI Clock line for the display.
+ * Current_Monitor:   (Current MCU) This is the buffered output of the PCR current monitor pin.
+ * Col[n]:            The nth column of switches on the keypad, starting from the left side.
+ * Row[n]:            The nth row    of switches on the keypad, starting from the top.
+ * RF_Start:          (RF START 3.3V) Input for the RF Start trigger from the transmitter.
  */
 
-#define PRI0             2
-#define PRI1             3
-#define PRI2             4
-#define PCR_Trigger      5
-#define PCR_Reset        6
-#define Fault_In         7
-#define DC               9
-#define CS              10
-#define SDI             11
-#define SDO             12
-#define SCK             13
-#define Current_Monitor 14
-#define Col3            15 
-#define Col2            16 
-#define Col1            17 
-#define Col0            18 
-#define Row3            19 
-#define Row2            20 
-#define Row1            21 
-#define Row0            22 
-#define RF_Start        23
+#define Charge_Trigger    0
+#define Discharge_Trigger 1
+#define PRI0              2
+#define PRI1              3
+#define PRI2              4
+#define PCR_Trigger       5
+#define PCR_Reset         6
+#define Fault_In          7
+#define NC                8
+#define DC                9 
+#define CS               10
+#define SDI              11
+#define SDO              12
+#define SCK              13
+#define Current_Monitor  14
+#define Col3             15 
+#define Col2             16 
+#define Col1             17 
+#define Col0             18 
+#define Row3             19 
+#define Row2             20 
+#define Row1             21 
+#define Row0             22 
+#define RF_Start         23
 
 /*
  *****************************
@@ -95,18 +104,22 @@
 float        bleed_off_current;
 float        bleed_time;
 float        charge_trigger_time;
+int          charge_trigger_width
 unsigned int current_monitor_raw;
 float        current_monitor_voltage;
 float        discharge_trigger_time;
+int          discharge_trigger_width;
 float        discharge_trigger_delta;
 char         key;
 int          menu_position;
 int          operating_mode;
 float        PCR_trigger_time;
+int          PCR_trigger_width;
 float        PRF;
 int          PRF_menu;
 float        pulse_interval;
 int          start_menu;
+uint_32t     start_time;
 
 const byte   rows = 4;
 const byte   cols = 4;
@@ -120,6 +133,11 @@ char keymap[rows][cols] = {
 
 byte row_pins[rows] = { Row0, Row1, Row2, Row3 };
 byte col_pins[cols] = { Col0, Col1, Col2, Col3 };
+
+IntervalTimer charge_timer;
+IntervalTimer discharge_timer;
+IntervalTimer PCR_timer;
+IntervalTimer pulse_timer;
 
 /*
  ***************
@@ -323,6 +341,38 @@ char* concatenateKeys(char* key_string, char* word) {
 } /* concatenateKeys(char* key_string, char* word) */
 
 
+void startTest() {
+  start_time = micros();
+  charge_timer.begin(chargeTrigger, charge_trigger_time);
+  discharge_timer.begin(dischargeTrigger, discharge_trigger_time);
+  PCR_timer.begin(PCRTrigger, PCR_trigger_time);
+} /* startTest() */
+
+void chargeTrigger() {
+  digitalWriteFast(Charge_Trigger, Low);
+  pulse_timer.begin(endPulse, charge_trigger_width);
+  charge_timer.end();
+}
+
+void dischargeTrigger() {
+  digitalWriteFast(Discharge_Trigger, Low);
+  pulse_timer.begin(endPulse, discharge_trigger_width);
+  discharge_timer.end();
+}
+
+void PCRTrigger() {
+  digitalWriteFast(PCR_Trigger, Low);
+  pulse_timer.begin(endPulse, PCR_trigger_width);
+  PCR_timer.end();
+}
+
+void endPulse() {
+  digitalWriteFast(Charge_Trigger, HIGH);
+  digitalWriteFast(Discharge_Trigger, HIGH);
+  digitalWriteFast(PCR_Trigger, HIGH);
+  pulse_timer.end();
+}
+
 /*
  ************
  *** Menu ***
@@ -435,12 +485,10 @@ void loop() {
     
     if (key == "1") {      /* Select transmitter dependent mode */
       operating_mode = 1;
-      start_menu     = 0;
     } /* if (key == '1') */
 
     else if (key == "2") { /* Select High Voltage Module control mode */
       operating_mode = 0;
-      start_menu     = 0;
     } /* else if (key == '2') */
   } /* while (menu.id() == Menu::ID::Start) */
 
@@ -457,15 +505,31 @@ void loop() {
   } /* if (menu.id() == Menu::ID::PulseMode) */
 
   while (menu.id() == Menu::ID::PulseMode) {
+    key = keyToString(keypad.getkey());
+    
+    if (key == "1") {      /* Select Short Pulse */
+      pulse_mode = 0;
+    } /* if (key == '1') */
 
+    else if (key == "2") { /* Select Long Pulse */
+      pulse_mode = 1;
+    } /* else if (key == '2') */
   } /* while (menu.id() == Menu::ID::PulseMode) */
 
   if    (menu.id() == Menu::ID::Test) {
-
+      attachInterrupt(digitalPinToInterrupt(RF_Start), startTest, FALLING);
   }/* if (menu.id() == Menu::ID::Test) */
 
   while (menu.id() == Menu::ID::Test) {
-
+    discharge_trigger_time = pulse_interval - discharge_trigger_delta;
+    if (pulse_mode == 0) { /* If Short Pulse */
+      charge_trigger_time = pulse_interval - 740.0;
+      PCR_trigger_time    = pulse_interval - 105.0;
+    }/* if (pulse_mode == 0) */
+    else if (pulse_mode == 1) { /* If Long Pulse */
+      charge_trigger_time = pulse_interval - 1200.0;
+      PCR_trigger_time    = pulse_interval - 205;
+    } /* else if (pulse_mode == 1) */
   } /* while (menu.id() == Menu::ID::Test) */
 
 } /* loop() */
