@@ -1,3 +1,8 @@
+v0.3 (12-10-2025) {
+  Added functions to end Charge, Discharge, and PCR triggers
+  Removed endPulse()
+  Added triggerTimings()
+} /* v0.3 (11-23-2025) */
 v0.3 (11-23-2025) {
   Added 5 new functions to control timing during test
   Added charge and discharge trigger pins
