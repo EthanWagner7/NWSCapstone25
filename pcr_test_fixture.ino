@@ -1,8 +1,8 @@
 /*
  ******************************************************************************************
  *** PCR Test Fixture Software                                                          ***
- *** Version:     0.1                                                                   ***
- *** Date:        11-09-2025                                                            ***
+ *** Version:     0.4                                                                   ***
+ *** Date:        12-10-2025                                                            ***
  *** Author:      Ethan Wagner (ewagner@ou.edu)                                         ***
  *** Board:       Teensy 4.0                                                            ***
  *** Repository:  https://github.com/EthanWagner7/NWSCapstone25                         ***
@@ -78,48 +78,81 @@
  * bleed_off_current:       The value of the bleed-off current in mA calculated from the current monitor
  * bleed_time:              The time in micros before the next pulse start trigger that the PCR trigger 
  *                            is sent.
+ * charge_flag:             This is a logical value that is 1 when it is safe to send the charge
+ *                            trigger, and 0 otherwise.
  * charge_trigger_time:     The time after pulse start that the charge trigger is sent.
  *                            = pulse_interval - 740;
+ * charge_trigger_width:    The width of the charge trigger in microseconds.
  * current_monitor_raw:     The ADC measurement of the current monitor pin. It is an integer value
  *                            between 0 and ((2^10) - 1) that is proportional to the voltage.
  * current_monitor_voltage: current_monitor_raw converted into a voltage.
  *                            = (current_monitor_raw / ((2^10) - 1)) * 3.3;
  *                            this is because 3.3V is the maximum readable voltage.
+ * discharge_flag:          This is a logical value that is 1 when it is safe to send the discharge
+ *                            trigger, and 0 otherwise.
  * discharge_trigger_time:  The time after pulse start that the discharge trigger is sent.
  *                            = charge_trigger_time + 720 + discharge_trigger_delta;
  * discharge_trigger_delta: The variance in time between the charge and discharge triggers.
  *                            (See Modulator Timing Relationships Diagram for more details)
+ * discharge_trigger_width: The width of the discharge trigger in microseconds.
+ * key:                     This holds the value of the key that has been pressed on the keypad.
+ * old_start_time:          The start time of the previous pulse cycle.
+ * operating_mode:          The mode the system is operating in, 1 for Transmitter-Dependent, and
+ *                            0 for High Voltage Control.
+ * PCR_flag:                This is a logical value that is 1 when it is safe to send the PCR
+ *                            trigger, and 0 otherwise.
  * PCR_trigger_time:        The time after pulse start that the PCR trigger is sent.
  *                            = pulse_interval - bleed_time;
+ * charge_trigger_width:    The width of the PCR trigger in microseconds.
  * PRF:                     The Pulse Repitition frequency.
  *                            = 1/pulse_interval;
  * pulse_interval:          The time between the falling edges of the RF start trigger.
- * rows:                    The number of rows     in the keypad.
- * cols:                    The number of colmumns in the keypad.
- * keymap:                  4x4 array that gives the layout of the keys on the keypad.
- * row_pins:                Array that gives the pin connections of the rows    on the keypad.
- * col_pins:                Array that gives the pin connections of the columns on the keypad.
+ *                            = 1/PRF;
+ * start_menu:              Logical value that controls whether the start menu should be displayed,
+ *                            0 for off, 1 for on.
+ * start_time:              The start time of the current pulse cycle in microseconds.
  */
 
-float        bleed_off_current;
-float        bleed_time;
-float        charge_trigger_time;
-int          charge_trigger_width
-unsigned int current_monitor_raw;
-float        current_monitor_voltage;
-float        discharge_trigger_time;
-int          discharge_trigger_width;
-float        discharge_trigger_delta;
-char         key;
-int          menu_position;
-int          operating_mode;
-float        PCR_trigger_time;
-int          PCR_trigger_width;
-float        PRF;
-int          PRF_menu;
-float        pulse_interval;
-int          start_menu;
-uint_32t     start_time;
+float         bleed_off_current;
+float         bleed_time;
+int           charge_flag;
+float         charge_trigger_time;
+int           charge_trigger_width;
+unsigned int  current_monitor_raw;
+float         current_monitor_voltage;
+int           discharge_flag;
+float         discharge_trigger_time;
+int           discharge_trigger_width;
+float         discharge_trigger_delta;
+char          key;
+unsigned long old_start_time;
+int           operating_mode;
+int           PCR_flag;
+float         PCR_trigger_time;
+int           PCR_trigger_width;
+float         PRF;
+float         pulse_interval;
+int           start_menu;
+unsigned long start_time;
+
+
+/*
+ **************************
+ * Non-Standard Variables *
+ **************************
+ * 
+ * rows:                    The number of rows     in the keypad.
+ * cols:                    The number of colmumns in the keypad.
+ * keymap:                  4x4 matrix that gives the layout of the keys on the keypad.
+ * row_pins:                Array that gives the pin connections of the rows    on the keypad.
+ * col_pins:                Array that gives the pin connections of the columns on the keypad.
+ * charge_timer:            This is a timer that manages the timing of the charge    trigger.
+ * discharge_timer:         This is a timer that manages the timing of the discharge trigger.
+ * PCR_timer:               This is a timer that manages the timing of the PCR       trigger.
+ * menu:                    This is an object of the Menu class, which is in the code below.
+ *                            Menu objects essentially serve as a state register and state transition 
+ *                            logic for a set of menus.
+ */
 
 const byte   rows = 4;
 const byte   cols = 4;
@@ -137,21 +170,13 @@ byte col_pins[cols] = { Col0, Col1, Col2, Col3 };
 IntervalTimer charge_timer;
 IntervalTimer discharge_timer;
 IntervalTimer PCR_timer;
-IntervalTimer pulse_timer;
+Menu menu;
 
 /*
  ***************
  *** setup() ***
  ***************
  *
- **********
- * Inputs *      
- **********
- * None
- ***********
- * Outputs *
- ***********
- * None
  ***************
  * Description *
  ***************
@@ -179,8 +204,20 @@ void setup() {
   /* Set start_menu to 0 to disable operating mode prompt*/
   start_menu     = 1; 
   operating_mode = 0;
-  menu_position  = 1;
-  
+  start_time     = 0;
+  old_start_time = 0;
+
+
+  /* Trigger test inputs */
+  PRF = 517.24;
+  pulse_interval = ((1.0/PRF)*1e6); /* In microseconds */
+  pulse_mode = 0;
+  outputPRIs(PRF);
+  triggerTimings(PRF, pulse_mode);
+  charge_flag = 1;
+  discharge_flag = 1;
+  PCR_flag = 1;
+  attachInterrupt(digitalPinToInterrupt(RF_Start), startTest, FALLING);
 } /* setup() */
 
 /*
@@ -192,9 +229,9 @@ void setup() {
  * Inputs *      
  **********
  * PRF: The Pulse Repetition Frequency that the system is operating at.
- ***********
- * Outputs *
- ***********
+ **********
+ * Output *
+ **********
  * None
  ***************
  * Description *
@@ -265,9 +302,9 @@ void outputPRIs(float PRF) {
  *
  * key: This is the char that is returned from the getKey() function of the Keypad class
  *
- ***********
- * Outputs *
- ***********
+ **********
+ * Output *
+ **********
  *
  * String version of key.
  *
@@ -318,9 +355,9 @@ const char* keyToString(char key) {
  *        "321." if the user were trying to input "321.24". If nothing has been typed,  
  *        pass the empty string, "", to the function.
  *
- ***********
- * Outputs *
- ***********
+ **********
+ * Output *
+ **********
  *
  * combine: This is the concatenation of word and key_string. For example, 
  *            if word = "321" and key_string = ".", then combine "321.".
@@ -340,37 +377,261 @@ char* concatenateKeys(char* key_string, char* word) {
   return combine;
 } /* concatenateKeys(char* key_string, char* word) */
 
+/*
+ *************************
+ *** timeDifference () ***
+ *************************
+ *
+ **********
+ * Inputs *      
+ **********
+ *
+ * time1: The earlier time of the pair.
+ * time2: The later   time of the pair.
+ *
+ **********
+ * Output *
+ **********
+ *
+ * time_difference: The difference in time between the two times.
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function takes two times and returns the difference, regardless of rollover.
+ * It exists because the micros() function, which gives the system time in microseconds,
+ * will roll over every 2^32 - 1 microseconds, which is about every 70 minutes. In the case that
+ * the system uptime were greater than that value, simply taking the difference of a time before the 
+ * rollover and a time after would yield a negative result, which could break things...
+ *
+ */
+
+unsigned long timeDifference(time1, time2) {
+  unsigned long time_difference;
+  if (time1 > time2) {
+    time_difference = (((2^32) - 1) - time1) + time2);
+  }
+  else {
+    time_difference = time2 - time1;
+  }
+  return time_difference;
+}
+
+/*
+ *******************
+ *** startTest() ***
+ *******************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the interrupt attached to the falling edge of the RF start trigger.
+ *  It starts the timers that control the charge, discharge, and PCR triggers. It also reads the start
+ *  time of the pulse cycle for PRF recalculation.
+ *
+ */
 
 void startTest() {
-  start_time = micros();
-  charge_timer.begin(chargeTrigger, charge_trigger_time);
-  discharge_timer.begin(dischargeTrigger, discharge_trigger_time);
-  PCR_timer.begin(PCRTrigger, PCR_trigger_time);
+  if (charge_flag && discharge_flag && PCR_flag) {
+    charge_flag = 0;
+    discharge_flag = 0;
+    PCR_flag = 0;
+    charge_timer.begin(chargeTrigger, charge_trigger_time);
+    discharge_timer.begin(dischargeTrigger, discharge_trigger_time);
+    PCR_timer.begin(PCRTrigger, PCR_trigger_time);
+  }
+  
 } /* startTest() */
 
+/*
+ ***********************
+ *** chargeTrigger() ***
+ ***********************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt for the charge trigger. It sets the charge trigger
+ *  pin low, then starts a timer that sets it high again after the appropriate amount of time.
+ *
+ */
+
 void chargeTrigger() {
-  digitalWriteFast(Charge_Trigger, Low);
-  pulse_timer.begin(endPulse, charge_trigger_width);
+  digitalWriteFast(Charge_Trigger, LOW);
+  charge_timer.begin(endChargePulse, charge_trigger_width);
+}
+
+/*
+ **************************
+ *** dischargeTrigger() ***
+ **************************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt for the discharge trigger. It sets the discharge trigger
+ *  pin low, then starts a timer that sets it high again after the appropriate amount of time.
+ *
+ */
+
+void dischargeTrigger() {
+  digitalWriteFast(Discharge_Trigger, LOW);
+  discharge_timer.begin(endDischargePulse, discharge_trigger_width);
+}
+
+/*
+ ***********************
+ *** PCRTrigger() ***
+ ***********************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt for the PCR trigger. It sets the PCR trigger
+ *  pin low, then starts a timer that sets it high again after the appropriate amount of time.
+ *
+ */
+
+void PCRTrigger() {
+  digitalWriteFast(PCR_Trigger, LOW);
+  PCR_timer.begin(endPCRPulse, PCR_trigger_width);
+}
+
+/*
+ ************************
+ *** endChargePulse() ***
+ ************************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt from the chargeTrigger() function.
+ *  It sets the charge_flag to signify that the charge trigger has been sent and sets
+ *  the charge trigger pin high.
+ *
+ */
+
+void endChargePulse() {
+  charge_flag = 1;
+  digitalWriteFast(Charge_Trigger, HIGH);
   charge_timer.end();
 }
 
-void dischargeTrigger() {
-  digitalWriteFast(Discharge_Trigger, Low);
-  pulse_timer.begin(endPulse, discharge_trigger_width);
+/*
+ ***************************
+ *** endDischargePulse() ***
+ ***************************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt from the dischargeTrigger() function.
+ *  It sets the discharge_flag to signify that the discharge trigger has been sent and sets
+ *  the discharge trigger pin high.
+ *
+ */
+
+void endDischargePulse() {
+  discharge_flag = 1;
+  digitalWriteFast(Discharge_Trigger, HIGH);
   discharge_timer.end();
 }
 
-void PCRTrigger() {
-  digitalWriteFast(PCR_Trigger, Low);
-  pulse_timer.begin(endPulse, PCR_trigger_width);
+/*
+ *********************
+ *** endPCRPulse() ***
+ *********************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function is called by the timer interrupt from the PCRTrigger() function.
+ *  It sets the PCR_flag to signify that the PCR trigger has been sent and sets
+ *  the PCR trigger pin high.
+ *
+ */
+
+void endPCRPulse() {
+  PCR_flag = 1;
+  digitalWriteFast(PCR_Trigger, HIGH);
   PCR_timer.end();
 }
 
-void endPulse() {
+/*
+ ***************
+ *** reset() ***
+ ***************
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function stops all timers, resets triggers detaches the RF start interrupt, and resets the menu.
+ *
+ */
+
+void reset() {
   digitalWriteFast(Charge_Trigger, HIGH);
   digitalWriteFast(Discharge_Trigger, HIGH);
   digitalWriteFast(PCR_Trigger, HIGH);
-  pulse_timer.end();
+  charge_timer.end();
+  discharge_timer.end();
+  PCR_timer.end();
+  menu.reset();
+  detachInterrupt(digitalPinToInterrupt(RF_START));
+}
+
+/*
+ ************************
+ *** triggerTimings() ***
+ ************************
+ *
+ **********
+ * Inputs *      
+ **********
+ *
+ * PRF: The PRF that the transmitter is operating at.
+ * pulse_mode: 0 for short pulse, 1 for long pulse/
+ *
+ **********
+ * Output *
+ **********
+ *
+ * None
+ *
+ ***************
+ * Description *
+ ***************
+ *
+ * This function sets the timings of all of the triggers given the PRF and pulse mode. For information
+ *  on where these values come from, see the modulator timing relationships diagram.
+ *
+ */
+
+void triggerTimings(float PRF, int pulse_mode) {
+  /* 
+   * The constant 3.0 is added to triggers to advance the timing to offset the latency in IntervalTimers
+   *  This value is not precise and could be improved through experimentation.
+   */
+  if (pulse_mode == 0) { /* If Short Pulse */
+    charge_trigger_time     = pulse_interval - (740.0 + 3.0);
+    PCR_trigger_time        = pulse_interval - (105.0 + 3.0);
+    discharge_trigger_delta = (2.24 + 3.0);
+  }/* if (pulse_mode == 0) */
+  else if (pulse_mode == 1) { /* If Long Pulse */
+    charge_trigger_time     = pulse_interval - (1200.0 + 3.0);
+    PCR_trigger_time        = pulse_interval - (205.0 + 3.0);
+    discharge_trigger_delta = (4.48 + 3.0);
+  } /* else if (pulse_mode == 1) */
+  discharge_trigger_time = pulse_interval - discharge_trigger_delta;
 }
 
 /*
@@ -394,6 +655,8 @@ void endPulse() {
  * Functions *
  *************
  * 
+ * reset(): This function sets the menu back to Start.
+ *
  * enter(): This function switches the menu to the next menu in the sequence.
  *            For example, if menu.enter() is called and the current menu is PRF,
  *            the enter function switches the current menu to PulseMode.
@@ -417,6 +680,10 @@ public:
   enum class ID : uint8_t {Options, Start, PRF, PulseMode, Test};
 
   Menu() : current(ID::Start) {} //Initialize current screen
+
+  void reset() {
+    current = ID::Start;
+  } /* reset() */
 
   void enter() {
     switch(current) {
@@ -452,21 +719,12 @@ public:
 
 }/* Menu */
 
-Menu menu;
 
 /*
  **************
  *** loop() ***
  **************
  *
- **********
- * Inputs *      
- **********
- * None
- ***********
- * Outputs *
- ***********
- * None
  ***************
  * Description *
  ***************
@@ -476,12 +734,17 @@ Menu menu;
  */
  
 void loop() {
+  
+  /* 
+   * This menu skeleton does nothing right now. I'm leaving it so that future teams can get an idea
+   *  of how the Menu class works in practice.
+   */
   if    (menu.id() == Menu::ID::Start) { 
     /* Output Start Menu */
   } /* if (menu.id() == Menu::ID::Start) */
 
   while (menu.id() == Menu::ID::Start) {
-    key = keyToString(keypad.getkey());
+    key = keyToString(keypad.getkey()); 
     
     if (key == "1") {      /* Select transmitter dependent mode */
       operating_mode = 1;
@@ -517,19 +780,11 @@ void loop() {
   } /* while (menu.id() == Menu::ID::PulseMode) */
 
   if    (menu.id() == Menu::ID::Test) {
-      attachInterrupt(digitalPinToInterrupt(RF_Start), startTest, FALLING);
+    attachInterrupt(digitalPinToInterrupt(RF_Start), startTest, FALLING);
   }/* if (menu.id() == Menu::ID::Test) */
 
   while (menu.id() == Menu::ID::Test) {
-    discharge_trigger_time = pulse_interval - discharge_trigger_delta;
-    if (pulse_mode == 0) { /* If Short Pulse */
-      charge_trigger_time = pulse_interval - 740.0;
-      PCR_trigger_time    = pulse_interval - 105.0;
-    }/* if (pulse_mode == 0) */
-    else if (pulse_mode == 1) { /* If Long Pulse */
-      charge_trigger_time = pulse_interval - 1200.0;
-      PCR_trigger_time    = pulse_interval - 205;
-    } /* else if (pulse_mode == 1) */
+    
   } /* while (menu.id() == Menu::ID::Test) */
-
+ 
 } /* loop() */
