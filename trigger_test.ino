@@ -30,26 +30,28 @@
 
 float         bleed_off_current;
 float         bleed_time;
-int           charge_trigger_time;
-int           charge_trigger_width = 1;
+float         charge_trigger_time;
+int           charge_trigger_width = 20;
 unsigned int  current_monitor_raw;
 float         current_monitor_voltage;
-int           discharge_trigger_time;
-int           discharge_trigger_width = 1;
+float         discharge_trigger_time;
+int           discharge_trigger_width = 20;
 int           discharge_trigger_delta;
 char          key;
 int           menu_position;
 unsigned long old_start_time;
 int           operating_mode;
-int           PCR_trigger_time;
-int           PCR_trigger_width = 1;
+float         PCR_trigger_time;
+int           PCR_trigger_width = 20;
 float         PRF;
-int           PRF_menu;
-int           pulse_interval;
+float         pulse_interval;
 int           pulse_mode;
 int           start_menu;
 unsigned long start_time;
-int           test_flag;
+int           charge_flag;
+int           discharge_flag;
+int           PCR_flag;
+
 
 
 IntervalTimer charge_timer;
@@ -60,12 +62,15 @@ IntervalTimer clockTimer;
 
 
 void startTest() {
-  //old_start_time = start_time;
-  //start_time = micros();
-  test_flag = 0;
-  charge_timer.begin(chargeTrigger, charge_trigger_time);
-  discharge_timer.begin(dischargeTrigger, discharge_trigger_time);
-  PCR_timer.begin(PCRTrigger, PCR_trigger_time);
+  if (charge_flag && discharge_flag && PCR_flag) {
+    charge_flag = 0;
+    discharge_flag = 0;
+    PCR_flag = 0;
+    charge_timer.begin(chargeTrigger, charge_trigger_time);
+    discharge_timer.begin(dischargeTrigger, discharge_trigger_time);
+    PCR_timer.begin(PCRTrigger, PCR_trigger_time);
+  }
+  
 } /* startTest() */
 
 
@@ -85,16 +90,19 @@ void PCRTrigger() {
 }
 
 void endChargePulse() {
+  charge_flag = 1;
   digitalWriteFast(Charge_Trigger, HIGH);
   charge_timer.end();
 }
 
 void endDischargePulse() {
+  discharge_flag = 1;
   digitalWriteFast(Discharge_Trigger, HIGH);
   discharge_timer.end();
 }
 
 void endPCRPulse() {
+  PCR_flag = 1;
   digitalWriteFast(PCR_Trigger, HIGH);
   PCR_timer.end();
 }
@@ -109,13 +117,70 @@ void reset() {
   detachInterrupt(digitalPinToInterrupt(RF_Start));
 }
 
-void endTest() {
-  test_flag = 1;
-}
+
 
 void toggleClock() {
+  int low_time = 1;
+  if (digitalReadFast(test_pulse)){
+    clockTimer.begin(toggleClock, low_time);
+  }
+  else {
+    clockTimer.begin(toggleClock, (pulse_interval - low_time));
+  }
   digitalWriteFast(test_pulse, !digitalReadFast(test_pulse));
 }
+
+void outputPRIs(float PRF) {
+
+  if (PRF <= 327.09) {
+    digitalWriteFast(PRI0, HIGH);
+    digitalWriteFast(PRI1, HIGH);
+    digitalWriteFast(PRI2, HIGH);
+  } /* if (PRF <= 327.09) */
+
+  else if ((372.09 < PRF) && (PRF <= 446.52)) {
+    digitalWriteFast(PRI0, LOW);
+    digitalWriteFast(PRI1, HIGH);
+    digitalWriteFast(PRI2, HIGH);
+  } /* else if ((372.09 < PRF) && (PRF <= 446.52)) */
+
+  else if ((446.52 < PRF) && (PRF <= 536.04)) {
+    digitalWriteFast(PRI0, HIGH);
+    digitalWriteFast(PRI1, LOW);
+    digitalWriteFast(PRI2, HIGH);
+  } /* else if ((446.52 < PRF) && (PRF <= 536.04)) */
+
+  else if ((536.04 < PRF) && (PRF <= 643.29)) {
+    digitalWriteFast(PRI0, LOW);
+    digitalWriteFast(PRI1, LOW);
+    digitalWriteFast(PRI2, HIGH);
+  } /* else if ((536.04 < PRF) && (PRF <= 643.29)) */
+
+  else if ((643.29 < PRF) && (PRF <= 771.90)) {
+    digitalWriteFast(PRI0, HIGH);
+    digitalWriteFast(PRI1, HIGH);
+    digitalWriteFast(PRI2, LOW);
+  } /* else if ((643.29 < PRF) && (PRF <= 771.90)) */
+
+  else if ((771.90 < PRF) && (PRF <= 926.35)) {
+    digitalWriteFast(PRI0, LOW);
+    digitalWriteFast(PRI1, HIGH);
+    digitalWriteFast(PRI2, LOW);
+  } /* else if ((771.90 < PRF) && (PRF <= 926.35)) */
+
+  else if ((926.35 < PRF) && (PRF <= 1111.72)) {
+    digitalWriteFast(PRI0, HIGH);
+    digitalWriteFast(PRI1, LOW);
+    digitalWriteFast(PRI2, LOW);
+  } /* else if ((926.35 < PRF) && (PRF <= 1111.72)) */
+
+  else if (1111.72 < PRF) {
+    digitalWriteFast(PRI0, LOW);
+    digitalWriteFast(PRI1, LOW);
+    digitalWriteFast(PRI2, LOW);
+  } /* else if (1111.72 < PRF) */
+
+} /* outputPRIs() */
 
 void setup() {
   pinMode(PRI0, OUTPUT); 
@@ -135,30 +200,29 @@ void setup() {
   pinMode(RF_Start, INPUT);
   reset();
   attachInterrupt(digitalPinToInterrupt(RF_Start), startTest, FALLING);
-  test_flag = 1;
-  PRF = 500.0;
-  pulse_interval = 2000;
-  pulse_mode = 1;
+  PRF = 517.24;
+  pulse_interval = ((1.0/PRF)*1e6);
+  float pulse_cycle_time = pulse_interval/2.0;
+  pulse_mode = 0;
+  outputPRIs(PRF);
   if (pulse_mode == 0) { /* If Short Pulse */
-      charge_trigger_time     = pulse_interval - 740;
-      PCR_trigger_time        = pulse_interval - 105;
-      discharge_trigger_delta = 2;
+      charge_trigger_time     = pulse_interval - (740.0 + 3);
+      PCR_trigger_time        = pulse_interval - (105.0 + 3);
+      discharge_trigger_delta = (2.24 + 3);
   }/* if (pulse_mode == 0) */
   else if (pulse_mode == 1) { /* If Long Pulse */
-      charge_trigger_time     = pulse_interval - 1200;
-      PCR_trigger_time        = pulse_interval - 205;
-      discharge_trigger_delta = 4;
+      charge_trigger_time     = pulse_interval - (1200.0 + 3);
+      PCR_trigger_time        = pulse_interval - (205.0 + 3);
+      discharge_trigger_delta = (4.48 + 3);
   } /* else if (pulse_mode == 1) */
   discharge_trigger_time = pulse_interval - discharge_trigger_delta;
-  clockTimer.begin(toggleClock, 2000);
+  charge_flag = 1;
+  discharge_flag = 1;
+  PCR_flag = 1;
+  //clockTimer.begin(toggleClock, pulse_cycle_time); 
 }
 
 
 void loop() {
 
 }
-
-
-
-
-
